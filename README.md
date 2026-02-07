@@ -46,7 +46,7 @@ Supports low-latency desktop streaming directly to a browser.
 
 # 📦 Installation
 
-## 1️⃣ Install Rust
+ 1️⃣ Install Rust
 
 https://rustup.rs/
 
