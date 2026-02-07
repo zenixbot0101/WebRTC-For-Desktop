@@ -65,7 +65,7 @@ Verify:
 
 cl
 3️⃣ Clone Project
-git clone --recursive <your-repository-url>
+git clone --recursive https://github.com/zenixbot0101/WebRTC-For-Desktop.git
 cd desktop-streaming
 4️⃣ Build
 cargo build --release
