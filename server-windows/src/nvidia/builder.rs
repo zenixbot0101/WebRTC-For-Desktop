@@ -1,20 +1,24 @@
 use super::encoder::start_encoder;
 use crate::{capture::ScreenDuplicator, device::create_d3d11_device};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
+
 use webrtc::{
     rtp_transceiver::{rtp_codec::RTCRtpCodecCapability, RTCRtpTransceiver},
     track::track_local::track_local_static_rtp::TrackLocalStaticRTP,
 };
+
 use webrtc_helper::{
     codecs::{Codec, CodecType, H264Codec, H264Profile},
     encoder::EncoderBuilder,
     interceptor::twcc::TwccBandwidthEstimate,
     peer::IceConnectionState,
 };
+
 use windows::Win32::Graphics::{
     Direct3D11::ID3D11Device,
     Dxgi::Common::{
-        DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM,
+        DXGI_FORMAT,
+        DXGI_FORMAT_B8G8R8A8_UNORM,
         DXGI_FORMAT_R10G10B10A2_UNORM,
         DXGI_FORMAT_R8G8B8A8_UNORM,
     },
@@ -32,9 +36,13 @@ pub struct NvidiaEncoderBuilder {
 
 impl EncoderBuilder for NvidiaEncoderBuilder {
 
-    fn id(&self) -> &str { &self.id }
+    fn id(&self) -> &str {
+        &self.id
+    }
 
-    fn stream_id(&self) -> &str { &self.stream_id }
+    fn stream_id(&self) -> &str {
+        &self.stream_id
+    }
 
     fn codec_type(&self) -> CodecType {
         CodecType::Video
@@ -54,20 +62,19 @@ impl EncoderBuilder for NvidiaEncoderBuilder {
         ssrc: u32,
         payload_type: u8,
     ) {
-
-        // ================= SAFE CODEC =================
+        // ================= FORCE H264 =================
 
         let codec = nvenc::Codec::H264;
 
-        if let Err(e) = self.inner_builder.with_codec(codec) {
-            panic!("H264 not supported by NVENC: {e}");
-        }
+        self.inner_builder
+            .with_codec(codec)
+            .expect("H264 not supported by NVENC");
 
-        // ================= SAFE PROFILE =================
+        // ================= PROFILE SAFE =================
 
-        let mut profile = h264_profile_from_sdp_fmtp_line(
-            &codec_capability.sdp_fmtp_line
-        ).unwrap_or(nvenc::CodecProfile::H264Main);
+        let mut profile =
+            h264_profile_from_sdp_fmtp_line(&codec_capability.sdp_fmtp_line)
+                .unwrap_or(nvenc::CodecProfile::H264Main);
 
         let supported_profiles =
             self.inner_builder
@@ -75,32 +82,29 @@ impl EncoderBuilder for NvidiaEncoderBuilder {
                 .unwrap_or_default();
 
         if !supported_profiles.contains(&profile) {
-            log::warn!("Profile {:?} not supported. Fallback to Main", profile);
+            log::warn!(
+                "Requested profile {:?} not supported. Falling back to Main.",
+                profile
+            );
             profile = nvenc::CodecProfile::H264Main;
         }
 
-        // ================= SAFE PRESET =================
+        // ================= PRESET SAFE =================
 
         let supported_presets =
             self.inner_builder
                 .supported_encode_presets(codec)
                 .unwrap_or_default();
 
-        let preset = if supported_presets.contains(&nvenc::EncodePreset::LowLatencyDefault) {
-            nvenc::EncodePreset::LowLatencyDefault
-        } else if supported_presets.contains(&nvenc::EncodePreset::LowLatencyHQ) {
-            nvenc::EncodePreset::LowLatencyHQ
-        } else if supported_presets.contains(&nvenc::EncodePreset::P4) {
-            nvenc::EncodePreset::P4
-        } else {
-            supported_presets
-                .first()
-                .copied()
-                .unwrap_or(nvenc::EncodePreset::LowLatencyDefault)
-        };
+        let preset = supported_presets
+            .iter()
+            .find(|p| **p == nvenc::EncodePreset::P4)
+            .copied()
+            .unwrap_or_else(|| supported_presets[0]);
 
         let tuning_info = nvenc::TuningInfo::UltraLowLatency;
-        let multi_pass = nvenc::MultiPassSetting::Disabled;
+
+        let multi_pass = nvenc::MultiPassSetting::FullResolution;
 
         log::info!(
             "Using H264 profile {:?}, preset {:?}",
@@ -108,23 +112,21 @@ impl EncoderBuilder for NvidiaEncoderBuilder {
             preset
         );
 
-        // ================= CONFIGURE =================
-
         self.inner_builder
             .with_codec_profile(profile)
-            .expect("Profile set failed");
+            .expect("Failed to set profile");
 
         self.inner_builder
             .with_encode_preset(preset)
-            .expect("Preset set failed");
+            .expect("Failed to set preset");
 
         self.inner_builder
             .with_tuning_info(tuning_info)
-            .expect("Tuning set failed");
+            .expect("Failed to set tuning");
 
         self.inner_builder
             .set_multi_pass(multi_pass)
-            .expect("Multipass set failed");
+            .expect("Failed to set multipass");
 
         // ================= SCREEN =================
 
@@ -133,7 +135,8 @@ impl EncoderBuilder for NvidiaEncoderBuilder {
                 self.device,
                 self.display_index,
                 self.display_formats,
-            ).expect("Failed to create ScreenDuplicator");
+            )
+            .expect("Failed to create ScreenDuplicator");
 
         let display_desc = screen_duplicator.desc();
         let mode_desc = &display_desc.ModeDesc;
@@ -180,7 +183,9 @@ impl NvidiaEncoderBuilder {
             nvenc::EncoderBuilder::new(device.clone())
                 .expect("Failed to create NVENC builder");
 
-        inner_builder.repeat_csd(true).unwrap();
+        inner_builder
+            .repeat_csd(true)
+            .expect("Failed to enable repeat CSD");
 
         let display_formats = vec![
             DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -203,6 +208,10 @@ impl NvidiaEncoderBuilder {
         }
     }
 }
+
+// ======================================================
+// ================= UTIL FUNCTIONS =====================
+// ======================================================
 
 fn list_supported_codecs(
     inner_builder: &mut nvenc::EncoderBuilder<nvenc::DirectX11Device>,
@@ -235,4 +244,23 @@ fn list_supported_codecs(
     }
 
     Ok(codecs)
+}
+
+fn h264_profile_from_sdp_fmtp_line(
+    sdp_fmtp_line: &str,
+) -> Option<nvenc::CodecProfile> {
+
+    if let Some((_, id)) = sdp_fmtp_line.split_once("profile-level-id=") {
+        if id.len() >= 6 {
+
+            match &id[..2] {
+                "42" => return Some(nvenc::CodecProfile::H264Baseline),
+                "4d" => return Some(nvenc::CodecProfile::H264Main),
+                "64" => return Some(nvenc::CodecProfile::H264High),
+                _ => {}
+            }
+        }
+    }
+
+    None
 }
